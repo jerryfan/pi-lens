@@ -1,15 +1,16 @@
 {
 	"name": "pi-lens",
-	"version": "3.8.33",
+	"version": "3.8.35",
 	"type": "module",
-	"description": "Real-time code feedback for pi — LSP, linters, formatters, type-checking, structural analysis & booboo",
+	"description": "Real-time code feedback for pi \u2014 LSP, linters, formatters, type-checking, structural analysis & booboo",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/apmantza/pi-lens.git"
 	},
 	"main": "index.ts",
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc --project tsconfig.build.json",
+		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",
 		"test": "vitest run",
 		"test:watch": "vitest",
@@ -50,6 +51,7 @@
 	"license": "MIT",
 	"files": [
 		"index.ts",
+		"i18n.ts",
 		"config/",
 		"tools/",
 		"clients/**/*.ts",

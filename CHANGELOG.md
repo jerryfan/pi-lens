@@ -4,16 +4,34 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cascade diagnostics now surface for TypeScript neighbors on cold sessions** — previously cascade silently returned zero diagnostics for TypeScript/Deno neighbors when no passive snapshot existed (i.e. the agent had not yet opened the file). Cold-snapshot neighbors now fall through into the parallel `touchFile` pool with a 1000ms budget (tighter than the 2000ms used for non-jsts neighbors, since the TypeScript server is expected to be warm). Valid snapshots still use the fast read path with no touch. New `coldSnapshot: true` field on `neighbor_touch` log entries tracks these in `cascade.log`.
+
+### Improved
+
+- **`ast-grep` skill clarifies string literal behaviour** — exact string literals in patterns (e.g. `from "./utils"`) work correctly; only metavariables inside string literals (e.g. `from "$PATH"`) are not supported and should use grep instead. Previously the skill incorrectly implied import path matching was unsupported entirely, causing unnecessary grep fallbacks.
+
+## [3.8.35] - 2026-05-02
+
+### Fixed
+
+- **Startup hang for all users fixed (issue #46)** — `igniteWarmFiles` was previously `await`ed unconditionally on the session-start path, causing every session to pay the cost of a full directory walk looking for `lsp.json` (checking 3 config paths at every ancestor up to the filesystem root) before returning. This caused the 20–30s startup delay reported in 3.8.34 regardless of whether `warmFiles` was configured. The `loadLSPConfig` call now runs with `await` at the call site; if `warmFiles` is absent or empty, `igniteWarmFiles` is skipped entirely. When warm files are configured, the per-file LSP `touchFile` loop runs fire-and-forget so it never blocks session completion.
+
+## [3.8.34] - 2026-05-01
+
 ### Added
 
+- **LSP config `warmFiles` option** — added `warmFiles` to the LSP config schema. Accepts an array of relative or absolute file paths that pi-lens opens at full session startup to seed language servers that perform lazy translation-unit indexing (e.g. clangd). Without this, a short-lived `workspaceSymbol` query may return empty results for symbols in TUs clangd has not yet built an AST for, and background indexing timing is unreliable at LLVM scale. Specify entry-point files that transitively cover most of the project. The feature is general — any LSP that indexes lazily benefits.
+- **TypeScript tsconfig split into build and lint configs** — `tsconfig.build.json` now drives `npm run build` (emits, excludes tests), while `tsconfig.json` drives `npm run lint` (no-emit, includes tests, `allowImportingTsExtensions`, `noUnusedLocals`, `noUnusedParameters`). CI lint step consolidated to `npm run lint`. Surfaced and fixed several latent type errors: unused imports removed, `error: null → undefined` alignment, `_ctx` unused-param rename, `void resolveSlowWait` for intentional float.
+- **`GITHUB_TOOLS` const array and `GitHubToolId` type exported from installer** — the set of tools resolved via GitHub releases is now an exported `as const` array with a derived type, eliminating the duplicate definition that previously lived only in the test file.
+- **`startupFailureWindowMs` option on `launchLSP`** — callers can now override the startup-failure detection window per-launch instead of relying solely on the Windows/non-Windows heuristic. Used by the LSP lifecycle test to avoid the full `WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS` delay in CI.
+- **Test log pollution fix for read-guard** — `read-guard.test.ts` now mocks `read-guard-logger` unconditionally, so test events never reach `~/.pi-lens/read-guard.log` regardless of how the test suite is invoked.
 - **Tab/space indentation mismatch correction in the edit hook** — some models output spaces in `oldText` when the file uses tabs (or vice versa), causing edits to fail with a cryptic "not found" error. The `tool_call` hook now detects this before execution by trying tabs↔2-spaces and tabs↔4-spaces conversions against the actual file. On mismatch it blocks with a `🔄 RETRYABLE` message containing the corrected `oldText` verbatim, so the model retries successfully on the next attempt at zero cost when `oldText` already matches.
 - **Global project-data storage is now the default for new projects** — project-scoped pi-lens artifacts (turn state, worklog, metrics history, index, install choices, runner scratch data) now default to `~/.pi-lens/projects/<project-slug>/` instead of creating `<project>/.pi-lens/`. Existing projects that already have `<project>/.pi-lens/` continue to reuse it unless `PILENS_DATA_DIR` is explicitly set. This closes issue #40 while preserving backward compatibility.
 - **`PILENS_DATA_DIR` and `PI_LENS_STARTUP_MODE` documented in README** — both env vars are now listed under a dedicated _Environment Variables_ section between `## Run` and `## Key Commands`.
 - **Tree-sitter read expansion for the read-before-edit guard** — partial reads (requested `limit ≤ 60` lines) are now automatically expanded to cover the full enclosing function, method, or class using the tree-sitter AST. The agent receives the full symbol as context, and the read guard records symbol-level coverage so edits anywhere within the symbol pass without requiring the agent to have read every line. Supports TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, and Ruby. Runs within a 200 ms budget; falls back silently on parse failure or unsupported extension. Replaces the dead LSP-based expansion (which required `limit = 1` and a warm server — zero production hits).
 - **`read_pattern` structured log on every read** — `~/.pi-lens/read-guard.log` now records a `read_pattern` JSONL event for each read tool call: `offset`, `limit`, `totalLines`, `fractionRead`, `isPartial`, `fileKind`, and `expandedByTs`. Enables analysis of actual agent read behaviour across sessions.
-
-### Added
-
 - **`prettier.config.ts` and `eslint.config.ts` added to config detection arrays** — both config filenames are now recognised by `hasPrettierConfig` and `hasEslintConfig` respectively. Previously only `.js`/`.cjs`/`.mjs` variants were listed, so TypeScript-based configs were silently ignored.
 - **Walk-up boundary stops at nearest `package.json`** — all 8 config-detection walk-up functions (`hasEslintConfig`, `getBiomeConfigPath`, `hasOxlintConfig`, `hasMypyConfig`, `hasDetektConfig`, `hasBlackConfig`, `hasRuffConfig`, `hasPrettierConfig`) now stop ascending once they reach the directory containing the nearest `package.json` instead of walking all the way to the filesystem root. This prevents cross-project config bleed in monorepos where an unrelated project higher up the tree happens to have a config file. A shared `walkUpDirsUntilPackageJson` helper encapsulates the boundary logic.
 - **Formatter and linter selection logged to `latency.log`** — `getFormattersForFile` now emits a `formatter_selected` phase entry recording the chosen formatter name, selection reason (`explicit-config`, `smart-default`, `detect`, or `none`), and `cwd`. `getLinterPolicyForCwd` emits a `linter_selected` phase entry recording the chosen runner, gate, `cwd`, and the full detection-context flags. Both events are skipped in test mode.

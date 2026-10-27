@@ -15,6 +15,8 @@ import {
 	getDefaultStartupTools,
 } from "./language-profile.js";
 import { runLogCleanup } from "./log-cleanup.js";
+import { initLSPConfig, loadLSPConfig } from "./lsp/config.js";
+import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import {
 	buildProjectIndex,
@@ -76,6 +78,55 @@ function resolveStartupMode(): StartupMode {
 }
 
 // --- Session-start helpers ---
+
+async function igniteWarmFiles(
+	cwd: string,
+	warmFiles: string[],
+	runtime: RuntimeCoordinator,
+	sessionGeneration: number,
+	dbg: (msg: string) => void,
+): Promise<void> {
+	try {
+		dbg(`session_start lsp-warm: ${warmFiles.length} warm file(s) configured`);
+
+		await initLSPConfig(cwd);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+
+		const lspService = getLSPService();
+		const total = warmFiles.length;
+		let loaded = 0;
+		let errors = 0;
+
+		for (const relPath of warmFiles) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			const filePath = path.isAbsolute(relPath)
+				? relPath
+				: path.resolve(cwd, relPath);
+			if (!nodeFs.existsSync(filePath)) {
+				dbg(`session_start lsp-warm: not found: ${relPath}`);
+				errors++;
+				continue;
+			}
+			try {
+				const content = nodeFs.readFileSync(filePath, "utf-8");
+				await lspService.touchFile(filePath, content, {
+					diagnostics: "none",
+					source: "startup-warm",
+					clientScope: "primary",
+					maxClientWaitMs: 2000,
+				});
+				loaded++;
+			} catch (err) {
+				dbg(`session_start lsp-warm: error ${relPath}: ${err}`);
+				errors++;
+			}
+		}
+
+		dbg(`session_start lsp-warm: ${loaded}/${total} opened (${errors} err)`);
+	} catch (err) {
+		dbg(`session_start lsp-warm: config/init error: ${err}`);
+	}
+}
 
 function firePreinstallDefaults(
 	ensureTool: SessionStartDeps["ensureTool"],
@@ -553,6 +604,19 @@ export async function handleSessionStart(
 	}
 
 	dbg("session_start: background scans launched");
+
+	// LSP warm files — read config synchronously on the startup path (cheap file
+	// walk), then fire-and-forget the LSP touchFile loop so session start is not
+	// blocked by per-file LSP waits.
+	if (!getFlag("no-lsp") && allowBootstrapTasks) {
+		const lspConfig = await loadLSPConfig(cwd);
+		const warmFiles = lspConfig.warmFiles ?? [];
+		if (warmFiles.length > 0) {
+			igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch((err) =>
+				dbg(`session_start lsp-warm: unhandled error: ${err}`),
+			);
+		}
+	}
 
 	dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);
 }
